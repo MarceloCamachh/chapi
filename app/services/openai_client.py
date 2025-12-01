@@ -6,6 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Sequence
 
+import httpx
 from openai import OpenAI
 
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -23,7 +24,11 @@ def _load_client() -> OpenAI:
         raise OpenAIClientError(
             "OPENAI_API_KEY no está definido. Configúralo en el entorno antes de usar el cliente."
         )
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key, http_client=_build_httpx_client())
+
+
+def _build_httpx_client() -> httpx.Client:
+    return httpx.Client(follow_redirects=True, timeout=httpx.Timeout(30.0))
 
 
 def get_openai_client() -> OpenAI:
