@@ -4,6 +4,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 from typing import Sequence
 
 import httpx
@@ -11,6 +12,11 @@ from openai import OpenAI
 
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 SYSTEM_PROMPT_FILE = os.getenv("OPENAI_SYSTEM_PROMPT_FILE", "prompts/system_prompt.txt")
+INTRO_TEXT = "Hola, soy Chapi, tu compañero de apoyo emocional."
+_SESSION_GREETING_CACHE: set[str] = set()
+_SESSION_GREETING_LOCK = Lock()
+_DEFAULT_INTRO_SENT = False
+_DEFAULT_INTRO_LOCK = Lock()
 
 
 class OpenAIClientError(RuntimeError):
@@ -65,6 +71,8 @@ def chat_with_openai(
     messages.append({"role": "user", "content": prompt})
 
     client = get_openai_client()
+    is_first_turn = _is_first_turn(history, session_id)
+
     response = client.chat.completions.create(
         model=model,
         messages=messages,
@@ -74,7 +82,10 @@ def chat_with_openai(
     choice = response.choices[0].message.content
     if not choice:
         raise OpenAIClientError("La respuesta de OpenAI no contiene texto interpretable.")
-    return _clean_reply(choice)
+    cleaned = _clean_reply(choice)
+    if is_first_turn:
+        cleaned = _prefix_intro(cleaned)
+    return cleaned
 
 
 def _clean_reply(raw_text: str) -> str:
@@ -108,6 +119,34 @@ def _remove_emojis(text: str) -> str:
         flags=re.UNICODE,
     )
     return emoji_pattern.sub("", text)
+
+
+def _is_first_turn(history: Sequence[str] | None, session_id: str | None) -> bool:
+    if history:
+        return False
+    if not session_id:
+        return _mark_default_intro()
+    with _SESSION_GREETING_LOCK:
+        if session_id in _SESSION_GREETING_CACHE:
+            return False
+        _SESSION_GREETING_CACHE.add(session_id)
+        return True
+
+
+def _mark_default_intro() -> bool:
+    global _DEFAULT_INTRO_SENT
+    with _DEFAULT_INTRO_LOCK:
+        if _DEFAULT_INTRO_SENT:
+            return False
+        _DEFAULT_INTRO_SENT = True
+        return True
+
+
+def _prefix_intro(reply: str) -> str:
+    normalized = reply.lower()
+    if normalized.startswith("hola, soy chapi"):
+        return reply
+    return f"{INTRO_TEXT} {reply}".strip()
 
 
 

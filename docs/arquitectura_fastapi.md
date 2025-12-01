@@ -44,6 +44,7 @@ flowchart LR
 - El archivo `prompts/system_prompt.txt` define el comportamiento del chatbot (por defecto: apoyo emocional a personas solitarias).
 - Puedes sobrescribir la ruta con `OPENAI_SYSTEM_PROMPT_FILE=/ruta/a/tu_prompt.txt`.
 - Cualquier actualización en ese archivo se aprovecha automáticamente, gracias a que el cliente lo carga una sola vez al iniciar el proceso.
+- La primera respuesta de cada sesión incluye automáticamente la presentación “Hola, soy Chapi, tu compañero de apoyo emocional.”; se controla por `session_id` (en memoria) para no repetirla (si no envías `session_id`, solo se mostrará una vez por reinicio del servidor).
 
 ### 2.4 Integración de Gemini para STT/TTS
 
