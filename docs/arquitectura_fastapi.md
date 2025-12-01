@@ -6,7 +6,7 @@
 flowchart LR
     A[Robot (Arduino)] -- audio --> B[/FastAPI<br>endpoint /voice/]
     B --> C[Servicio STT<br>(opcional, backend)]
-    C --> D[Gemini API<br>(texto -> texto)]
+    C --> D[OpenAI API<br>(texto -> texto)]
     D --> E[Servicio TTS<br>(opcional, backend)]
     E -- audio --> A
 ```
@@ -16,8 +16,8 @@ flowchart LR
 
 ## 2. Responsabilidades del backend (FastAPI)
 
-- **Orquestación**: coordinar STT → Gemini → TTS de punta a punta.
-- **Gestión de claves**: mantener la `GEMINI_API_KEY` y cualquier secreto asociado a STT/TTS solo en el backend.
+- **Orquestación**: coordinar STT → OpenAI → TTS (STT/TTS siguen usando Gemini por ahora).
+- **Gestión de claves**: mantener `OPENAI_API_KEY`, `GEMINI_API_KEY` y cualquier secreto asociado a STT/TTS solo en el backend.
 - **Conversación**: opcionalmente almacenar contexto por `session_id` para diálogos continuos.
 - **Contrato estable**: exponer endpoints claros para el equipo de hardware.
 
@@ -28,17 +28,24 @@ flowchart LR
 | POST   | `/api/voice`| `audio` en `multipart/form-data`     | `audio/*` (bytes o archivo)      | Robot envía audio, recibe respuesta hablada. |
 | POST   | `/api/text` | JSON `{"message": "...", "session_id": "..."}` | JSON `{"reply": "..."}` | Debug rápido o robots que ya realizan STT. |
 
-### 2.2 Configuración segura de `GEMINI_API_KEY`
+### 2.2 Configuración segura de `OPENAI_API_KEY`
 
 1. Copia/crea un archivo `.env` en la raíz del repositorio con:
    ```
-   GEMINI_API_KEY=tu_clave_de_gemini
+   OPENAI_API_KEY=tu_clave_de_openai
+   OPENAI_MODEL=gpt-4o-mini   # opcional
    ```
-2. FastAPI ejecuta `load_dotenv()` al iniciar (ver `app/__init__.py`), por lo que `os.getenv("GEMINI_API_KEY")` queda disponible en `services/gemini_client.py` sin configuraciones extra.
-3. `.env` está en `.gitignore` para que la clave no se suba al repositorio público. Comparte el valor solo por canales seguros.
-4. Usa `.env.example` como plantilla y añade ahí variables opcionales como `GEMINI_TTS_MODEL`, `GEMINI_TTS_VOICE`, `GEMINI_STT_MODEL` o `GEMINI_STT_PROMPT` si deseas personalizar voces/modelos.
+2. FastAPI ejecuta `load_dotenv()` al iniciar (ver `app/__init__.py`), por lo que `os.getenv("OPENAI_API_KEY")` queda disponible en `services/openai_client.py`.
+3. `.env` está en `.gitignore` para que la clave no se suba al repositorio público.
+4. Si además usarás el endpoint de voz, mantén en el mismo archivo la sección de Gemini (`GEMINI_API_KEY`, modelos STT/TTS, etc.) descrita más abajo.
 
-### 2.3 Integración de Gemini para STT/TTS
+### 2.3 Plantilla de contexto (system prompt)
+
+- El archivo `prompts/system_prompt.txt` define el comportamiento del chatbot (por defecto: apoyo emocional a personas solitarias).
+- Puedes sobrescribir la ruta con `OPENAI_SYSTEM_PROMPT_FILE=/ruta/a/tu_prompt.txt`.
+- Cualquier actualización en ese archivo se aprovecha automáticamente, gracias a que el cliente lo carga una sola vez al iniciar el proceso.
+
+### 2.4 Integración de Gemini para STT/TTS
 
 1. La única credencial obligatoria es `GEMINI_API_KEY`.
 2. STT usa `gemini-2.5-flash` (configurable con `GEMINI_STT_MODEL` y `GEMINI_STT_PROMPT`); TTS usa `gemini-2.5-flash-preview-tts` (puedes sobrescribirlo con `GEMINI_TTS_MODEL` y ajustar la voz con `GEMINI_TTS_VOICE`, ej. `Puck`, `Sprout`, `Charon`).
@@ -54,14 +61,39 @@ app/
 │  ├─ voice.py             # /api/voice
 │  └─ text.py              # /api/text
 └─ services/
-   ├─ gemini_client.py     # Cliente oficial google-genai
+   ├─ openai_client.py     # Cliente oficial OpenAI (endpoint texto)
+   ├─ gemini_client.py     # Cliente google-genai (STT/TTS y voz)
    ├─ stt_client.py        # Speech-to-Text (real o dummy)
    └─ tts_client.py        # Text-to-Speech (real o dummy)
 ```
 
 Separar routers y servicios facilita reemplazar mocks por implementaciones reales sin tocar las rutas.
 
-### 3.1 Cliente Gemini (google-genai)
+### 3.1 Cliente OpenAI (SDK oficial)
+
+```python
+# services/openai_client.py
+import os
+from openai import OpenAI
+
+API_KEY = os.environ["OPENAI_API_KEY"]
+client = OpenAI(api_key=API_KEY)
+
+def chat_with_openai(prompt: str, history: list[str] | None = None) -> str:
+    messages = [{"role": "user", "content": msg} for msg in (history or [])]
+    messages.append({"role": "user", "content": prompt})
+
+    response = client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        messages=messages,
+    )
+    return response.choices[0].message.content.strip()
+```
+
+- Instalar con `pip install -U openai`.
+- `history` sigue opcional para compartir contexto si se guarda el historial por `session_id`.
+
+### 3.2 Cliente Gemini (google-genai)
 
 ```python
 # services/gemini_client.py
@@ -85,13 +117,13 @@ def chat_with_gemini(prompt: str, history: list[str] | None = None) -> str:
 - Instalar con `pip install -U google-genai`.
 - `history` permite conservar contexto por `session_id` si se almacena en Redis/BD.
 
-### 3.2 Endpoint de texto (pruebas rápidas)
+### 3.3 Endpoint de texto (pruebas rápidas)
 
 ```python
 # routers/text.py
 from fastapi import APIRouter
 from pydantic import BaseModel
-from services.gemini_client import chat_with_gemini
+from services.openai_client import chat_with_openai
 
 router = APIRouter(prefix="/api", tags=["text"])
 
@@ -104,14 +136,14 @@ class ChatResponse(BaseModel):
 
 @router.post("/text", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    reply = chat_with_gemini(req.message)
+    reply = chat_with_openai(req.message, session_id=req.session_id)
     return ChatResponse(reply=reply)
 ```
 
 - Ideal para Postman/cURL.
 - Simplifica validar Gemini antes de integrar audio.
 
-### 3.3 Endpoint de voz
+### 3.4 Endpoint de voz
 
 ```python
 # routers/voice.py

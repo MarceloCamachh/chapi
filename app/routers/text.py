@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.services.gemini_client import chat_with_gemini
+from app.services.openai_client import chat_with_openai
 
 router = APIRouter(prefix="/api", tags=["text"])
 
@@ -20,7 +20,7 @@ class ChatResponse(BaseModel):
 
 @router.post("/text", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
-    reply = chat_with_gemini(req.message, session_id=req.session_id)
+    reply = chat_with_openai(req.message, session_id=req.session_id)
     return ChatResponse(reply=reply)
 
 
